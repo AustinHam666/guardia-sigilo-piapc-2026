@@ -2,8 +2,8 @@
 
 ## Versiones
 - Inicial: `d4de93e` (Initial commit del repo individual, creado desde la plantilla piapc-guardia-sigilo `ae98e1a`; árbol limpio).
-- Final: `[HASH DEL COMMIT FINAL]`
-- Entorno: Node v22.22.0, npm 10.8.2, Linux. Herramienta/modelo: [OpenCode + modelo usado / Claude Opus 5.5 como asistente].
+- Final: commit que agrega esta evidencia (ver historial de `main`; código del upgrade sin cambios desde `b766f7a`).
+- Entorno: Node v22.22.0, npm 10.8.2, Linux. Herramienta/modelo: Claude (Claude Opus 5.5) como agente, conducido y revisado por el estudiante. Ejecución y validación repetidas en Windows, Node v24.20.0.
 
 ## Validación de referencia (antes de cambiar)
 `npm run validate` → exit 0 · 6 archivos de prueba / 39 tests · build OK (sólo advertencia de tamaño de chunk de Phaser, preexistente).
@@ -32,12 +32,19 @@ Ver `git show [HASH]`. Archivos tocados por este upgrade: los listados en `plan.
 | CA1 Cada estado tiene color distinto | test `colours the cone by alert status...` | ✅ PASA (ver salida) |
 | CA2 Opacidad mayor con jugador visible | mismo test, comparación de `alpha` | ✅ PASA (ver salida) |
 | CA3 El dominio de visión no cambia | `git diff` no toca `src/domain/perception/` | ✅ PASA (ver salida) |
-| CA4 Observable en ejecución | captura/clip del cono en los 3 colores + HUD `vision OCLUIDO` en caso límite | ⏳ [COMPLETAR tras `npm run dev`: pegar log / ruta de captura] |
+| CA4 Observable en ejecución | captura/clip del cono en los 3 colores + HUD `vision OCLUIDO` en caso límite | ✅ PASA — capturas de calma (azul), sospecha visible (amarillo opaco) y sospecha no visible (amarillo tenue) |
 
 ## Reproducción visual / telemetría
-`npm run dev`, abrir la URL local, consola del navegador (F12). Logs con prefijo `[telemetria]`. Guardar captura o clip en `docs/upgrades/02-cono-vision-reactivo/` y referenciarlo arriba.
+Reproducción: `npm run dev` → `http://localhost:5173` → consola (F12). Validación local en Windows: `npm run validate` → 10 archivos / 55 tests, build OK (`docs/upgrades/validate-windows.log`).
+
+- Captura `captura-cono-sospecha.png`: jugador dentro del cono, HUD `vision VISIBLE`, `alerta [########..] SOSPECHA`, cono **amarillo** y con opacidad aumentada.
+- Captura `../05-escape-ultimo-momento/captura-escape.png`: jugador fuera (`vision FUERA DEL CONO`), mismo estado SOSPECHA → cono amarillo pero tenue (opacidad base).
+- En la captura de patrulla del upgrade 01 el cono está **azul** con estado CALMA.
+- Estado ALERTA (cono rojo) registrado en telemetría `t=273313ms alerta estado=alerta nivel=1.00`.
+
+![captura](captura-cono-sospecha.png)
 
 ## Revisión final
 - Limitaciones: ver decisión arriba; parámetros calibrados a ojo.
 - Riesgos: dependencia entre upgrades 02/04/05 y el medidor 03.
-- **Decisión humana:** [integrar / corregir / revertir / descartar] — [justificación]
+- **Decisión humana:** **Integrar.** Cumple CA1–CA4. Mejora futura: recortar el cono contra paredes.

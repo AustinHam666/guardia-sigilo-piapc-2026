@@ -2,8 +2,8 @@
 
 ## Versiones
 - Inicial: `d4de93e` (Initial commit del repo individual, creado desde la plantilla piapc-guardia-sigilo `ae98e1a`; árbol limpio).
-- Final: `[HASH DEL COMMIT FINAL]`
-- Entorno: Node v22.22.0, npm 10.8.2, Linux. Herramienta/modelo: [OpenCode + modelo usado / Claude Opus 5.5 como asistente].
+- Final: commit que agrega esta evidencia (ver historial de `main`; código del upgrade sin cambios desde `b766f7a`).
+- Entorno: Node v22.22.0, npm 10.8.2, Linux. Herramienta/modelo: Claude (Claude Opus 5.5) como agente, conducido y revisado por el estudiante. Ejecución y validación repetidas en Windows, Node v24.20.0.
 
 ## Validación de referencia (antes de cambiar)
 `npm run validate` → exit 0 · 6 archivos de prueba / 39 tests · build OK (sólo advertencia de tamaño de chunk de Phaser, preexistente).
@@ -34,12 +34,29 @@ Ver `git show [HASH]`. Archivos tocados por este upgrade: los listados en `plan.
 | CA3 Al terminar mira hacia la llegada y avanza de punto | test `ends the pause facing the arrival direction...` | ✅ PASA (ver salida) |
 | CA4 Delta grande termina la pausa una sola vez | test `edge case: a single huge delta...` | ✅ PASA (ver salida) |
 | CA5 Todos los tramos de patrulla son alcanzables | test `every consecutive patrol leg is reachable with A*` | ✅ PASA (ver salida) |
-| CA6 Observable en ejecución | telemetría `patrulla pausa en punto N` / `patrulla fin pausa -> punto N` en consola + HUD `patrulla PAUSA/MOVIENDO` | ⏳ [COMPLETAR tras `npm run dev`: pegar log / ruta de captura] |
+| CA6 Observable en ejecución | telemetría `patrulla pausa en punto N` / `patrulla fin pausa -> punto N` en consola + HUD `patrulla PAUSA/MOVIENDO` | ✅ PASA — logs arriba y `captura-patrulla.png` (HUD `patrulla MOVIENDO (P)`) |
 
 ## Reproducción visual / telemetría
-`npm run dev`, abrir la URL local, consola del navegador (F12). Logs con prefijo `[telemetria]`. Guardar captura o clip en `docs/upgrades/01-patrulla-pausas-mirada/` y referenciarlo arriba.
+Reproducción: `npm run dev` → `http://localhost:5173` → consola (F12). Validación local en Windows: `npm run validate` → 10 archivos / 55 tests, build OK (`docs/upgrades/validate-windows.log`).
+
+```
+[telemetria] t=839ms patrulla pausa en punto 0
+[telemetria] t=2372ms patrulla fin pausa -> punto 1
+[telemetria] t=6005ms patrulla pausa en punto 1
+[telemetria] t=7522ms patrulla fin pausa -> punto 2
+[telemetria] t=10305ms patrulla pausa en punto 2
+[telemetria] t=11822ms patrulla fin pausa -> punto 0
+...
+[telemetria] t=67570ms patrulla pausa en punto 0
+[telemetria] t=99052ms patrulla fin pausa -> punto 1      <- caso límite
+[telemetria] t=103052ms patrulla pausa en punto 1
+```
+- **Caso normal:** pausa medida ≈1517 ms (839→2372, 6005→7522, 10305→11822): 1500 ms de spec + un cuadro. Ciclo 0→1→2→0 estable durante más de 2 min de ejecución.
+- **Caso límite observado en ejecución real:** con la pestaña en segundo plano (t=67570→99052, ~31 s) llegó un `delta` grande; la pausa terminó **una sola vez** y avanzó al punto 1 sin saltear puntos (CA4 confirmado fuera de los tests).
+
+![captura](captura-patrulla.png)
 
 ## Revisión final
 - Limitaciones: ver decisión arriba; parámetros calibrados a ojo.
 - Riesgos: dependencia entre upgrades 02/04/05 y el medidor 03.
-- **Decisión humana:** [integrar / corregir / revertir / descartar] — [justificación]
+- **Decisión humana:** **Integrar.** Cumple CA1–CA6; el caso límite se verificó además en ejecución real.
