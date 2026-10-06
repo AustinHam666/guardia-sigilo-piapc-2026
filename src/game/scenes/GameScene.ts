@@ -4,6 +4,7 @@ import {
   GRID_HEIGHT,
   GRID_WIDTH,
   LAB_MAP,
+  PATROL_POINTS,
   PLAYER_START,
   TILE_SIZE,
 } from "../../application/simulation/labLevel";
@@ -20,6 +21,20 @@ import { advanceAlongPath } from "../../domain/navigation/pathFollower";
 import type { SearchAlgorithm, SearchResult, SearchStatus } from "../../domain/navigation/search";
 import { timeSinceLastPerception } from "../../domain/perception/memory";
 import type { VisionReason, VisionResult } from "../../domain/perception/perception";
+import {
+  DEFAULT_ALERT_CONFIG,
+  initialAlertState,
+  updateAlert,
+  type AlertEvent,
+  type AlertState,
+} from "../../domain/behavior/alert";
+import {
+  beginPause,
+  initialPatrolState,
+  tickPause,
+  type PatrolState,
+} from "../../domain/behavior/patrol";
+import { ALERT_IMPACT, ESCAPE_FEEDBACK, alertMeterLabel, coneStyle } from "../presentation/feedback";
 
 const PLAYER_SPEED = 190;
 const GUARD_SPEED = 115;
@@ -27,6 +42,7 @@ const VISION_RANGE = 220;
 const FIELD_OF_VIEW = Math.PI / 2;
 const SOUND_RADIUS = 190;
 const SOUND_DURATION_MS = 800;
+const PATROL_CONFIG = { pauseMs: 1500, lookSweepRadians: Math.PI / 3 };
 const STATUS_LABELS: Readonly<Record<SearchStatus, string>> = {
   success: "EXITO",
   unreachable: "INALCANZABLE",
@@ -65,6 +81,11 @@ export class GameScene extends Phaser.Scene {
   private guardWaypoints: readonly Vector2[] = [];
   private nextWaypoint = 0;
   private perceptionState: PerceptionSimulationState = initialPerceptionState();
+  private patrolEnabled = true;
+  private patrolState: PatrolState = initialPatrolState({ x: -1, y: 0 });
+  private alertState: AlertState = initialAlertState();
+  private escapeLabel!: Phaser.GameObjects.Text;
+  private togglePatrol!: Phaser.Input.Keyboard.Key;
 
   public constructor() {
     super("GameScene");
@@ -77,6 +98,9 @@ export class GameScene extends Phaser.Scene {
     this.guardWaypoints = [];
     this.nextWaypoint = 0;
     this.perceptionState = initialPerceptionState();
+    this.patrolEnabled = true;
+    this.patrolState = initialPatrolState({ x: -1, y: 0 });
+    this.alertState = initialAlertState();
     this.cameras.main.setBackgroundColor("#10161c");
     this.drawGrid();
 
@@ -114,6 +138,7 @@ export class GameScene extends Phaser.Scene {
     this.reset = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
     this.toggleAlgorithm = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
     this.emitSound = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Q);
+    this.togglePatrol = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.P);
 
     this.perceptionGraphics = this.add.graphics().setDepth(1);
     this.navigationGraphics = this.add.graphics().setDepth(2);
@@ -133,7 +158,7 @@ export class GameScene extends Phaser.Scene {
       .setVisible(false);
 
     this.add
-      .text(16, 14, "H3 / PERCEPCION Y MOVIMIENTO", {
+      .text(16, 14, "H3+ / UPGRADES CLASE 8", {
         color: "#9eb4c2",
         fontFamily: "monospace",
         fontSize: "14px",
@@ -152,8 +177,19 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(1, 0)
       .setDepth(10);
 
+    this.escapeLabel = this.add
+      .text(GRID_WIDTH * TILE_SIZE / 2, 40, "ESCAPE", {
+        color: "#73c991",
+        fontFamily: "monospace",
+        fontSize: "28px",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5, 0)
+      .setDepth(11)
+      .setVisible(false);
+
     this.input.on("pointerdown", this.handlePointerDown, this);
-    this.renderNavigation();
+    this.setPatrolGoal();
     this.updatePerception(0);
   }
 
@@ -166,6 +202,15 @@ export class GameScene extends Phaser.Scene {
     if (Phaser.Input.Keyboard.JustDown(this.toggleAlgorithm)) {
       this.navigationAlgorithm = this.navigationAlgorithm === "astar" ? "bfs" : "astar";
       this.renderNavigation();
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.togglePatrol)) {
+      this.patrolEnabled = !this.patrolEnabled;
+      this.logTelemetry(time, `patrulla ${this.patrolEnabled ? "activada" : "desactivada"}`);
+      if (this.patrolEnabled) {
+        this.patrolState = { ...this.patrolState, phase: "moving", pausedForMs: 0 };
+        this.setPatrolGoal();
+      }
     }
 
     if (Phaser.Input.Keyboard.JustDown(this.emitSound)) {
@@ -188,8 +233,8 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.playerBody.setVelocity(velocity.x, velocity.y);
-    this.updateGuardMovement(delta);
-    this.updatePerception(time);
+    this.updateGuardMovement(time, delta);
+    this.updatePerception(time, delta);
   }
 
   private drawGrid(): void {
@@ -206,6 +251,7 @@ export class GameScene extends Phaser.Scene {
 
   private handlePointerDown(pointer: Phaser.Input.Pointer): void {
     this.navigationGoal = worldToCell({ x: pointer.worldX, y: pointer.worldY }, TILE_SIZE);
+    this.patrolEnabled = false;
     this.renderNavigation();
   }
 
@@ -264,7 +310,26 @@ export class GameScene extends Phaser.Scene {
     this.navigationGraphics.strokePath();
   }
 
-  private updateGuardMovement(delta: number): void {
+  private setPatrolGoal(): void {
+    const goal = PATROL_POINTS[this.patrolState.pointIndex];
+    if (goal) {
+      this.navigationGoal = goal;
+    }
+    this.renderNavigation();
+  }
+
+  private updateGuardMovement(time: number, delta: number): void {
+    if (this.patrolEnabled && this.patrolState.phase === "paused") {
+      const pause = tickPause(this.patrolState, delta, PATROL_POINTS.length, PATROL_CONFIG);
+      this.patrolState = pause.state;
+      this.guardFacing = pause.facing;
+      if (pause.pauseFinished) {
+        this.logTelemetry(time, `patrulla fin pausa -> punto ${this.patrolState.pointIndex}`);
+        this.setPatrolGoal();
+      }
+      return;
+    }
+
     const previous = { x: this.guard.x, y: this.guard.y };
     const movement = advanceAlongPath(
       previous,
@@ -278,9 +343,42 @@ export class GameScene extends Phaser.Scene {
     if (movement.direction) {
       this.guardFacing = movement.direction;
     }
+
+    if (this.patrolEnabled && movement.completed && this.guardWaypoints.length > 0) {
+      this.patrolState = beginPause(this.patrolState, this.guardFacing);
+      this.guardWaypoints = [];
+      this.logTelemetry(time, `patrulla pausa en punto ${this.patrolState.pointIndex}`);
+    }
   }
 
-  private updatePerception(time: number): void {
+  private logTelemetry(time: number, message: string): void {
+    console.info(`[telemetria] t=${Math.round(time)}ms ${message}`);
+  }
+
+  private applyAlertEvents(time: number, events: readonly AlertEvent[]): void {
+    for (const event of events) {
+      if (event === "estado-cambiado") {
+        this.logTelemetry(time, `alerta estado=${this.alertState.status} nivel=${this.alertState.level.toFixed(2)}`);
+      } else if (event === "alerta-iniciada") {
+        this.cameras.main.shake(ALERT_IMPACT.shakeDurationMs, ALERT_IMPACT.shakeIntensity);
+        this.cameras.main.flash(ALERT_IMPACT.flashDurationMs, 225, 105, 105);
+        this.logTelemetry(time, "impacto alerta: shake+flash iniciado");
+        this.time.delayedCall(ALERT_IMPACT.shakeDurationMs, () => {
+          this.logTelemetry(this.time.now, `impacto alerta: finalizado scroll=(${this.cameras.main.scrollX},${this.cameras.main.scrollY})`);
+        });
+      } else if (event === "escape") {
+        this.cameras.main.flash(ESCAPE_FEEDBACK.flashDurationMs, 115, 201, 145);
+        this.escapeLabel.setVisible(true);
+        this.logTelemetry(time, `escape de ultimo momento pico=${this.alertState.peakWhileVisible.toFixed(2)}`);
+        this.time.delayedCall(ESCAPE_FEEDBACK.labelDurationMs, () => {
+          this.escapeLabel.setVisible(false);
+          this.logTelemetry(this.time.now, "escape: feedback finalizado");
+        });
+      }
+    }
+  }
+
+  private updatePerception(time: number, delta = 0): void {
     const observer = { x: this.guard.x, y: this.guard.y };
     const target = { x: this.player.x, y: this.player.y };
     const frame = updatePerceptionSimulation(this.perceptionState, {
@@ -294,6 +392,14 @@ export class GameScene extends Phaser.Scene {
       timeMs: time,
     });
     this.perceptionState = frame.state;
+    const alert = updateAlert(this.alertState, {
+      visible: frame.vision.visible,
+      distance: frame.vision.distance,
+      range: VISION_RANGE,
+      deltaMs: delta,
+    }, DEFAULT_ALERT_CONFIG);
+    this.alertState = alert.state;
+    this.applyAlertEvents(time, alert.events);
 
     this.drawPerception(frame.vision);
     this.updateTelemetry(time, frame.vision, frame.soundHeard);
@@ -303,7 +409,8 @@ export class GameScene extends Phaser.Scene {
     this.perceptionGraphics.clear();
     const facingAngle = Math.atan2(this.guardFacing.y, this.guardFacing.x);
     const halfFieldOfView = FIELD_OF_VIEW / 2;
-    this.perceptionGraphics.fillStyle(vision.visible ? 0x73c991 : 0x6b8afd, 0.16);
+    const style = coneStyle(this.alertState.status, vision.visible);
+    this.perceptionGraphics.fillStyle(style.color, style.alpha);
     this.perceptionGraphics.beginPath();
     this.perceptionGraphics.moveTo(this.guard.x, this.guard.y);
     this.perceptionGraphics.arc(
@@ -346,6 +453,8 @@ export class GameScene extends Phaser.Scene {
       `vision ${VISION_LABELS[vision.reason]}`,
       `sonido ${sound}`,
       memory,
+      alertMeterLabel(this.alertState.level, this.alertState.status),
+      `patrulla ${this.patrolEnabled ? (this.patrolState.phase === "paused" ? "PAUSA" : "MOVIENDO") : "MANUAL"} (P)`,
     ]);
   }
 }
