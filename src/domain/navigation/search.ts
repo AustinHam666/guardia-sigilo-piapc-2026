@@ -1,5 +1,6 @@
 import { cellKey, isWalkable, type GridMap, type GridPoint } from "../model/grid";
 import { manhattanDistance, walkableNeighbors } from "./gridGraph";
+import { assertValidEnterCost, unitEnterCost, type EnterCostFn } from "./terrainCost";
 
 export type SearchAlgorithm = "bfs" | "astar";
 export type SearchStatus = "success" | "unreachable" | "invalid-start" | "invalid-goal";
@@ -43,7 +44,8 @@ export function findPathBfs(map: GridMap, start: GridPoint, goal: GridPoint): Se
     explored.push(current);
 
     if (samePoint(current, goal)) {
-      return successResult("bfs", start, goal, parents, explored, maximumFrontier);
+      const path = reconstructPath(start, goal, parents);
+      return successResult("bfs", path, path.length - 1, explored, maximumFrontier);
     }
 
     for (const neighbor of walkableNeighbors(map, current)) {
@@ -61,7 +63,17 @@ export function findPathBfs(map: GridMap, start: GridPoint, goal: GridPoint): Se
   return failureResult("bfs", "unreachable", explored, maximumFrontier);
 }
 
-export function findPathAStar(map: GridMap, start: GridPoint, goal: GridPoint): SearchResult {
+/**
+ * A* con costo de entrada por celda. Sin `enterCost` cada paso cuesta 1 (contrato
+ * unitario anterior). `totalCost` es la suma real de costos de entrada (g), no la
+ * cantidad de pasos. El inicio no suma costo.
+ */
+export function findPathAStar(
+  map: GridMap,
+  start: GridPoint,
+  goal: GridPoint,
+  enterCost: EnterCostFn = unitEnterCost,
+): SearchResult {
   const invalid = validateEndpoints("astar", map, start, goal);
   if (invalid) {
     return invalid;
@@ -89,7 +101,8 @@ export function findPathAStar(map: GridMap, start: GridPoint, goal: GridPoint): 
     explored.push(current.point);
 
     if (samePoint(current.point, goal)) {
-      return successResult("astar", start, goal, parents, explored, maximumFrontier);
+      const path = reconstructPath(start, goal, parents);
+      return successResult("astar", path, current.cost, explored, maximumFrontier);
     }
 
     for (const neighbor of walkableNeighbors(map, current.point)) {
@@ -98,7 +111,9 @@ export function findPathAStar(map: GridMap, start: GridPoint, goal: GridPoint): 
         continue;
       }
 
-      const candidateCost = current.cost + 1;
+      const stepCost = enterCost(neighbor);
+      assertValidEnterCost(stepCost);
+      const candidateCost = current.cost + stepCost;
       const knownCost = bestCosts.get(neighborKey);
       if (knownCost === undefined || candidateCost < knownCost) {
         insertionOrder += 1;
@@ -162,18 +177,16 @@ function lowestPriorityNode(frontier: ReadonlyMap<string, AStarNode>): AStarNode
 
 function successResult(
   algorithm: SearchAlgorithm,
-  start: GridPoint,
-  goal: GridPoint,
-  parents: ReadonlyMap<string, GridPoint>,
+  path: readonly GridPoint[],
+  totalCost: number,
   explored: readonly GridPoint[],
   maximumFrontier: number,
 ): SearchResult {
-  const path = reconstructPath(start, goal, parents);
   return {
     algorithm,
     status: "success",
     path,
-    totalCost: path.length - 1,
+    totalCost,
     expandedNodes: explored.length,
     maximumFrontier,
     explored,
